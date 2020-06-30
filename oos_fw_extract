@@ -1,0 +1,189 @@
+#!/bin/bash
+# oos_fw_extract - OxygenOS device firmware extraction tool
+MOUNT_ONLY=0 # Set to 1 if you ONLY want to navigate around /vendor for e.g. other FW files
+WORK_DIR="/tmp/oos_fw_extract" # FIXME: Change if low on system memory!
+OUT_DIR="fw_out"
+LOG_FILE="$OUT_DIR/oos_fw_extract.log"
+ZIP_FW_FILES=(
+	firmware-update/NON-HLOS.bin
+	firmware-update/BTFM.bin
+	vendor.new.*
+	vendor.transfer.list
+)
+OUT_FW_FILES=(
+	firmware_mnt/image/adsp.b*
+	firmware_mnt/image/adsp.mdt
+	firmware_mnt/image/adspua.jsn
+	firmware_mnt/image/bdwlan*.*
+	firmware_mnt/image/mba.mbn
+	firmware_mnt/image/modem.b*
+	firmware_mnt/image/modem.mdt
+	firmware_mnt/image/modemuw.jsn
+	firmware_mnt/image/slpi_v2.*
+	firmware_mnt/image/slpius.jsn
+	firmware_mnt/image/venus.*
+	firmware_mnt/image/wlanmdsp.mbn
+	bt_firmware/image/crbtfw21.tlv
+	bt_firmware/image/crnv21.bin
+	etc/firmware/tfa98xx.cnt
+	etc/wifi/WCNSS_qcom_cfg.ini
+	firmware/a530*.*
+	firmware/a540*.*
+	firmware/ipa*.*
+)
+OTA_ZIP="$1"
+
+info() { echo -e "\e[1mI: $@\e[0m"; }
+error() { echo -e "\e[1m\e[31mE: $@\e[0m"; }
+log() { echo "$ $@" >> "$LOG_FILE"; eval $@ 2>&1 >> "$LOG_FILE"; }
+cleanup() { mount | grep -q "/vendor" && sudo umount -R "$WORK_DIR/vendor/"; rm -r "$WORK_DIR/"; }
+
+# Dependencies check
+dependencies=(unzip sdat2img sudo curl)
+found_errors=0
+for dep in "${dependencies[@]}"; do
+	if ! hash $dep 2>/dev/null; then
+		error "Found missing dependency '$dep'!"
+		found_errors=1
+	fi
+done
+if [ "$found_errors" != "0" ]; then
+	error "Please install the dependencies listed above to continue!"
+	exit 2
+fi
+
+# Direct URL download
+if [[ "$OTA_ZIP" = "https://"*".zip" ]]; then
+	if [ ! -f oos_fw_download.zip ]; then
+		info "Firmware zip URL supplied, starting download..."
+		curl "$OTA_ZIP" -Lo oos_fw_download.zip
+	else
+		info "Firmware zip 'oos_fw_download.zip' already downloaded, continuing..."
+	fi
+	OTA_ZIP="oos_fw_download.zip"
+fi
+
+# ZIP check (>1 GiB)
+if [ ! -f "$OTA_ZIP" ] || [ `du "$OTA_ZIP" | awk '{ print \$1 }'` -gt 1048576000 ]; then
+	error "Please specify a full OxygenOS OTA (>1 GiB) zip as the first argument for this script!"
+	exit 1
+fi
+
+# Optional custom output dir
+if [ ! -z "$2" ]; then
+	[ ! -f "$2" ] && OUT_DIR="$2" || info "Ignoring custom output directory: file by the same name already exists!"
+fi
+if [ -d "$OUT_DIR/" ]; then
+	info "Cleaning pre-existing FW output directory '$OUT_DIR'..."
+	rm -r "$OUT_DIR/"
+else
+	info "FW output directory is '$OUT_DIR'"
+fi
+mkdir "$OUT_DIR/"
+LOG_FILE="$OUT_DIR/oos_fw_extract.log" # update log path
+
+# Begin
+mkdir -p "$WORK_DIR/"
+info "Extracting firmware files from the supplied OTA archive..."
+if ! log unzip -uj "$OTA_ZIP" "${ZIP_FW_FILES[@]}" -d "$WORK_DIR/"; then
+	error "Failed to extract archive file; please check '$LOG_FILE' for details!"
+	cleanup
+	exit 3
+fi
+info "Size of extracted files: `du -sh "$WORK_DIR/" | awk '{ print \$1 }'`"
+
+if [ ! -f "$WORK_DIR/vendor.img" ]; then
+	info "Converting vendor transfer files to mountable vendor.img..."
+	# TODO: Add support for brotli (.br) compressed vendor files?
+	if ! log sdat2img "$WORK_DIR/vendor.transfer.list" "$WORK_DIR"/vendor.new.* "$WORK_DIR/vendor.img"; then
+		error "Couldn't create a vendor.img file; please check '$LOG_FILE' for details!"
+		cleanup
+		exit 4
+	fi
+	rm "$WORK_DIR/vendor.transfer.list" "$WORK_DIR"/vendor.new.*
+	mkdir "$WORK_DIR/vendor/"
+fi
+
+info "Mounting vendor.img of size `du -h "$WORK_DIR/vendor.img" | awk '{ print \$1 }'`..."
+if ! sudo mount "$WORK_DIR/vendor.img" "$WORK_DIR/vendor/"; then
+	error "Couldn't mount vendor.img!"
+	cleanup
+	exit 5
+fi
+
+info "Mounting /bt_firmware & /firmware_mnt..."
+if ! (sudo mount "$WORK_DIR/BTFM.bin" "$WORK_DIR/vendor/bt_firmware" &&
+      sudo mount "$WORK_DIR/NON-HLOS.bin" "$WORK_DIR/vendor/firmware_mnt"); then
+	error "Couldn't mount one of the above firmware images!"
+	cleanup
+	exit 6
+fi
+
+if [ "$MOUNT_ONLY" = "1" ]; then
+	hash xdg-open 2>/dev/null && xdg-open "$WORK_DIR/vendor/"
+	info "Feel free to navigate around '$WORK_DIR/vendor/' now; remember to 'umount -R \"$WORK_DIR/vendor/\"' when done ^^"
+	exit 0
+fi
+
+info "Copying specified firmware files to FW output directory..."
+for fw_file in "${OUT_FW_FILES[@]}"; do
+	cp -r "$WORK_DIR"/vendor/$fw_file "$OUT_DIR/" || error "Failed to copy '$fw_file'!"
+done
+
+info "Umounting vendor.img & cleaning temporary working directory..."
+cleanup
+
+info "Normalizing all output FW file permissions to 644..."
+find "$OUT_DIR"/* -type f -exec chmod 644 {} +
+
+if hash pil-squasher 2>/dev/null; then
+	mdt_headers=`ls -1 "$OUT_DIR"/*.mdt` #  2>/dev/null
+	mdt_headers_count=`echo "$mdt_headers" | wc -l` # e.g. 6
+	if [ $mdt_headers_count -gt 0 ]; then
+		echo
+		read -p "Would you like to pack the $mdt_headers_count found FW files (with MDT headers) into singular MBN files (y/N)? " choice
+		if [ "${choice^^}" = "Y" ]; then
+			read -p 'Should the essentially "leftover duplicates" be preserved when FW files are squashed (Y/n)? ' choice
+			[ "${choice^^}" != "N" ] && delete_old_files=0 || delete_old_files=1
+			[ $delete_old_files -eq 0 ] && mkdir "$OUT_DIR/preserved/"
+			echo
+
+			while IFS= read -r mdt_header; do # e.g. "fw_out/venus.mdt"
+				fw_name="${mdt_header##*/}"   # e.g. "venus.mdt"
+				fw_name="${fw_name%.*}"       # e.g. "venus"
+
+				info "Squashing firmware for '$fw_name'..."
+				if pil-squasher "$OUT_DIR/$fw_name.mbn" "$mdt_header"; then
+					[ $delete_old_files -eq 1 ] &&
+					  rm "$OUT_DIR/$fw_name".{mdt,b*} ||
+					  mv "$OUT_DIR/$fw_name".{mdt,b*} "$OUT_DIR/preserved/"
+				else
+					error "Couldn't squash '$fw_name' firmware files into an MBN file!"
+				fi
+			done <<< "$mdt_headers"
+
+			# Remove unneeded ELF files that match MD5 checksums of created MBN files (duplicate files from OEM)
+			deleted_elfs=0
+			for elf_file in `ls -1 "$OUT_DIR"/*.elf`; do
+				mbn_md5_checksums=`md5sum "$OUT_DIR"/*.mbn`
+				if grep -q `md5sum "$elf_file" | awk '{ print \$1 }'` <<< "$mbn_md5_checksums"; then
+					rm "$elf_file"
+					((deleted_elfs++))
+				fi
+			done
+			[ $deleted_elfs -gt 0 ] && info "Removed $deleted_elfs unneeded ELF files matching the created MBN files by MD5 checksums!"
+		fi
+	else
+		info "Found no FW files with MDT headers to pack; skiping FW packing..."
+	fi
+else
+	info "Didn't detect andersson's pil-squasher as installed; skiping FW packing..."
+fi
+
+info "Removing unneeded log file '$LOG_FILE'..."
+rm "$LOG_FILE"
+
+fw_files=`find "$OUT_DIR/" -maxdepth 1 -type f`
+fw_files_count=`echo -e "$fw_files" | wc -l`
+fw_files_size=`find "$OUT_DIR/" -maxdepth 1 -type f -exec du -ch {} + | grep total$ | awk '{ print \$1 }'`
+echo -e "\e[1m\e\e[32mI: Extracted $fw_files_count firmware files $fw_files_size in size from the original archive\e[0m"
