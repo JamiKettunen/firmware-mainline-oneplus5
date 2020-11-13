@@ -1,5 +1,5 @@
 pkgname=firmware-oneplus-msm8998
-pkgver=9.0.11
+pkgver=10.0.1
 pkgrel=0
 pkgdesc="Firmware for OnePlus 5/5T"
 url="https://github.com/JamiKettunen/firmware-mainline-oneplus5"
@@ -37,4 +37,4 @@ package() {
 	done
 }
 
-sha512sums="85a0e290dd3c8066c11c6291c2c005f95dbe8d460579ac5bf0138e3c17e28c9db2817c022b3e61b99e141327728904289a57f12956b9ace885e0e35fc9d8a298  firmware-oneplus-msm8998-9.0.11.zip"
+sha512sums="e61fbfe1c3821308a182a8c6f00db816e8e8dd7b7ed2aaca89e5b59d04e2d924b7a1259976ed92a8a1dd018ceb217788a6a6d2ec723110425769dfb7b0f35e0c  firmware-oneplus-msm8998-10.0.1.zip"
