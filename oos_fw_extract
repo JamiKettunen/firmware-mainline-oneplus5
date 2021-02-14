@@ -13,23 +13,28 @@ ZIP_FW_FILES=(
 OUT_FW_FILES=(
 	firmware_mnt/image/adsp.b*
 	firmware_mnt/image/adsp.mdt
+	firmware_mnt/image/adspr.jsn
 	firmware_mnt/image/adspua.jsn
 	firmware_mnt/image/bdwlan*.*
 	firmware_mnt/image/mba.mbn
 	firmware_mnt/image/modem.b*
 	firmware_mnt/image/modem.mdt
+#	firmware_mnt/image/modemr.jsn
 	firmware_mnt/image/modemuw.jsn
 	firmware_mnt/image/slpi_v2.*
+	firmware_mnt/image/slpir.jsn
 	firmware_mnt/image/slpius.jsn
-	firmware_mnt/image/venus.*
+#	firmware_mnt/image/venus.*
 	firmware_mnt/image/wlanmdsp.mbn
 	bt_firmware/image/crbtfw21.tlv
 	bt_firmware/image/crnv21.bin
-	etc/firmware/tfa98xx.cnt
-	etc/wifi/WCNSS_qcom_cfg.ini
-	firmware/a530*.*
-	firmware/a540*.*
-	firmware/ipa*.*
+#	etc/firmware/tfa98xx.cnt
+#	etc/wifi/WCNSS_qcom_cfg.ini
+	firmware/a530_pfp.fw
+	firmware/a530_pm4.fw
+	firmware/a540_gpmu.fw2
+	firmware/a540_zap.*
+	firmware/ipa_fws.*
 )
 OTA_ZIP="$1"
 
